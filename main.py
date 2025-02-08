@@ -10,14 +10,68 @@ import logging
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.live import Live
+from rich.panel import Panel
 import time
 from openai import OpenAI
 from anthropic import Anthropic
 import asyncio
+import time
+import logging
+from dotenv import dotenv_values
 
-# Initialize clients
-openai_client = OpenAI()
-anthropic_client = Anthropic()
+# Load environment variables from .env file
+env_path = Path(__file__).parent / '.env'
+if not env_path.exists():
+    print(f"Error: .env file not found at {env_path}")
+    sys.exit(1)
+
+# Убедимся, что логгер настроен
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("project_extractor")
+
+# Initialize clients and validate API keys
+
+config = dotenv_values(env_path)
+openai_api_key = config.get("OPENAI_API_KEY")
+anthropic_api_key = config.get("ANTHROPIC_API_KEY")
+
+if not openai_api_key:
+    logger.error("OPENAI_API_KEY not found in .env file")
+    sys.exit(1)
+
+if not anthropic_api_key:
+    logger.error("ANTHROPIC_API_KEY not found in .env file")
+    sys.exit(1)
+
+try:
+    openai_client = OpenAI(api_key=openai_api_key)
+    anthropic_client = Anthropic(api_key=anthropic_api_key)
+    
+    # Verify API clients are working
+    logger.info("Testing API clients...")
+    
+    # Test OpenAI client
+    test_response = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Test message"}],
+        max_tokens=10
+    )
+    logger.info("OpenAI client initialized successfully")
+    
+    # Test Anthropic client
+    test_response = anthropic_client.messages.create(
+        model="claude-3-5-sonnet-latest",
+        max_tokens=10,
+        messages=[{"role": "user", "content": "Test message"}]
+    )
+    logger.info("Anthropic client initialized successfully")
+    
+except Exception as e:
+    logger.error(f"Error initializing API clients: {str(e)}", exc_info=True)
+    if hasattr(e, 'response'):
+        logger.error(f"API Response: {e.response}")
+    sys.exit(1)
 
 # Setup logging
 console = Console()
@@ -98,36 +152,101 @@ class ClaudeAgent:
         self.responsibilities = responsibilities
         
     async def analyze(self, context: Dict) -> Dict:
-        """Run agent analysis using Claude-3-5-sonnet-20241022"""
+        """Run agent analysis using claude-3-5-sonnet-latest"""
         try:
-            response = anthropic_client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=4000,
-                messages=[{
-                    "role": "user",
-                    "content": f"""You are the {self.name}, responsible for {self.role}.
-                    
-                    Your specific responsibilities are:
-                    {chr(10).join(f'- {r}' for r in self.responsibilities)}
-                    
-                    Analyze this project context and provide a detailed report focused on your domain:
-                    
-                    {json.dumps(context, indent=2)}
-                    
-                    Format your response as a structured report with clear sections and findings."""
-                }]
-            )
+            full_response = ""
+            current_content = ""
+            
+            with Live(Panel("Analyzing...", title=f"{self.name} Analysis", border_style="blue"), refresh_per_second=4) as live:
+                with anthropic_client.messages.stream(
+                    max_tokens=8000,
+                    messages=[{
+                        "role": "user",
+                        "content": f"""You are the {self.name}, responsible for {self.role}.
+                        
+                        Your specific responsibilities are:
+                        {chr(10).join(f'- {r}' for r in self.responsibilities)}
+                        
+                        Analyze this project context and provide a detailed report focused on your domain:
+                        
+                        {json.dumps(context, indent=2)}
+                        
+                        Format your response as a structured report with clear sections and findings."""
+                    }],
+                    model="claude-3-5-sonnet-latest"
+                ) as stream:
+                    for event in stream:
+                        if event.type == "message_start":
+                            live.update(Panel("Starting analysis...", title=f"{self.name} Analysis", border_style="blue"))
+                        elif event.type == "content_block_start":
+                            current_content = ""
+                        elif event.type == "content_block_delta":
+                            if event.delta.type == "text_delta":
+                                text = event.delta.text
+                                current_content += text
+                                full_response += text
+                                live.update(Panel(current_content, title=f"{self.name} Analysis", border_style="blue"))
+                        elif event.type == "content_block_stop":
+                            pass
+                        elif event.type == "message_delta":
+                            if event.delta.stop_reason:
+                                live.update(Panel("Analysis complete!", title=f"{self.name} Analysis", border_style="green"))
+                        elif event.type == "message_stop":
+                            pass
+                        elif event.type == "error":
+                            error_msg = f"Error: {event.error.message}"
+                            live.update(Panel(error_msg, title="Error", border_style="red"))
+                            raise Exception(error_msg)
             
             return {
                 "agent": self.name,
-                "findings": response.content[0].text
+                "findings": full_response
             }
         except Exception as e:
-            logger.error(f"Error in {self.name} analysis: {str(e)}")
+            logger.error(f"Error in {self.name} analysis: {str(e)}", exc_info=True)
+            if hasattr(e, 'response'):
+                logger.error(f"API Response: {e.response}")
             return {
                 "agent": self.name,
                 "error": str(e)
             }
+
+async def run_openai_completion(model: str, messages: List[Dict], title: str) -> Dict:
+    """Run OpenAI completion with streaming"""
+    try:
+        full_response = ""
+        current_content = ""
+        
+        client = OpenAI()
+        
+        with Live(Panel("Processing...", title=title, border_style="blue"), refresh_per_second=4) as live:
+            stream = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                # max_completion_tokens=24000,
+                stream=True
+            )
+            
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    text = chunk.choices[0].delta.content
+                    current_content += text
+                    full_response += text
+                    live.update(Panel(current_content, title=title, border_style="blue"))
+            
+            live.update(Panel("Complete!", title=title, border_style="green"))
+        
+        return {
+            "content": full_response,
+            "tokens": len(full_response.split())  # Rough estimate
+        }
+    except Exception as e:
+        logger.error(f"Error in OpenAI completion: {str(e)}", exc_info=True)
+        if hasattr(e, 'response'):
+            logger.error(f"API Response: {e.response}")
+        return {
+            "error": str(e)
+        }
 
 class ProjectAnalyzer:
     def __init__(self, directory: Path):
@@ -185,7 +304,7 @@ class ProjectAnalyzer:
         ]
         
     async def run_phase1(self, tree: List[str], package_info: Dict) -> Dict:
-        """Initial Discovery Phase using Claude-3.5-Sonnet agents"""
+        """Initial Discovery Phase using Claude-3-Opus"""
         context = {
             "tree_structure": tree,
             "package_info": package_info
@@ -200,10 +319,11 @@ class ProjectAnalyzer:
         }
         
     async def run_phase2(self, phase1_results: Dict) -> Dict:
-        """Methodical Planning Phase using o1-preview"""
+        """Methodical Planning Phase using o3-mini"""
         try:
-            response = openai_client.chat.completions.create(
-                model="o1-preview",
+            logger.info("Starting Phase 2 with OpenAI API...")
+            response = await run_openai_completion(
+                model="o3-mini",
                 messages=[{
                     "role": "user",
                     "content": f"""Process these agent findings and create a detailed, step-by-step analysis plan:
@@ -218,17 +338,19 @@ class ProjectAnalyzer:
                     4. Inter-dependency mapping method
                     """
                 }],
-                max_completion_tokens=25000
+                title="Phase 2: Methodical Planning"
             )
             
-            reasoning_tokens = 0
-            if hasattr(response.usage, 'completion_tokens_details'):
-                reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
+            if "error" in response:
+                return {
+                    "phase": "Methodical Planning",
+                    "error": response["error"]
+                }
             
             return {
                 "phase": "Methodical Planning",
-                "plan": response.choices[0].message.content,
-                "reasoning_tokens": reasoning_tokens
+                "plan": response["content"],
+                "reasoning_tokens": response["tokens"]
             }
         except Exception as e:
             logger.error(f"Error in Phase 2: {str(e)}")
@@ -238,7 +360,7 @@ class ProjectAnalyzer:
             }
             
     async def run_phase3(self, analysis_plan: Dict, tree: List[str]) -> Dict:
-        """Deep Analysis Phase using Claude-3.5-Sonnet agents"""
+        """Deep Analysis Phase using Claude-3-Opus"""
         context = {
             "analysis_plan": analysis_plan,
             "tree_structure": tree
@@ -253,10 +375,11 @@ class ProjectAnalyzer:
         }
         
     async def run_phase4(self, phase3_results: Dict) -> Dict:
-        """Synthesis Phase using o1-preview"""
+        """Synthesis Phase using o3-mini"""
         try:
-            response = openai_client.chat.completions.create(
-                model="o1-preview",
+            logger.info("Starting Phase 4 with OpenAI API...")
+            response = await run_openai_completion(
+                model="o3-mini",
                 messages=[{
                     "role": "user",
                     "content": f"""Review and synthesize these agent findings:
@@ -272,17 +395,19 @@ class ProjectAnalyzer:
                     5. Areas needing deeper investigation
                     """
                 }],
-                max_completion_tokens=25000
+                title="Phase 4: Synthesis"
             )
             
-            reasoning_tokens = 0
-            if hasattr(response.usage, 'completion_tokens_details'):
-                reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
+            if "error" in response:
+                return {
+                    "phase": "Synthesis",
+                    "error": response["error"]
+                }
             
             return {
                 "phase": "Synthesis",
-                "analysis": response.choices[0].message.content,
-                "reasoning_tokens": reasoning_tokens
+                "analysis": response["content"],
+                "reasoning_tokens": response["tokens"]
             }
         except Exception as e:
             logger.error(f"Error in Phase 4: {str(e)}")
@@ -292,43 +417,80 @@ class ProjectAnalyzer:
             }
             
     async def run_phase5(self, all_results: Dict) -> Dict:
-        """Consolidation Phase using Claude-3-5-sonnet-20241022"""
+        """Consolidation Phase using Claude-3-Opus"""
         try:
-            response = anthropic_client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=4000,
-                messages=[{
-                    "role": "user",
-                    "content": f"""As the Report Agent, create a comprehensive final report from all analysis phases:
-                    
-                    Analysis Results:
-                    {json.dumps(all_results, indent=2)}
-                    
-                    Your tasks:
-                    1. Combine all agent findings
-                    2. Organize by component/module
-                    3. Create comprehensive documentation
-                    4. Highlight key discoveries
-                    5. Prepare final report for O1"""
-                }]
-            )
+            full_response = ""
+            current_content = ""
+            
+            with Live(Panel("Consolidating...", title="Phase 5: Consolidation", border_style="blue"), refresh_per_second=4) as live:
+                with anthropic_client.messages.stream(
+                    max_tokens=8000,
+                    messages=[{
+                        "role": "user",
+                        "content": f"""As the Report Agent, create a comprehensive final report from all analysis phases:
+                        
+                        Analysis Results:
+                        {json.dumps(all_results, indent=2)}
+                        
+                        Your tasks:
+                        1. Combine all agent findings
+                        2. Organize by component/module
+                        3. Create comprehensive documentation
+                        4. Highlight key discoveries
+                        5. Prepare final report for O1"""
+                    }],
+                    model="claude-3-5-sonnet-latest"
+                ) as stream:
+                    for event in stream:
+                        if event.type == "message_start":
+                            live.update(Panel("Starting consolidation...", title="Phase 5: Consolidation", border_style="blue"))
+                        elif event.type == "content_block_start":
+                            current_content = ""
+                        elif event.type == "content_block_delta":
+                            if event.delta.type == "text_delta":
+                                text = event.delta.text
+                                current_content += text
+                                full_response += text
+                                live.update(Panel(current_content, title="Phase 5: Consolidation", border_style="blue"))
+                        elif event.type == "content_block_stop":
+                            pass
+                        elif event.type == "message_delta":
+                            if event.delta.stop_reason:
+                                live.update(Panel("Consolidation complete!", title="Phase 5: Consolidation", border_style="green"))
+                        elif event.type == "message_stop":
+                            pass
+                        elif event.type == "error":
+                            error_msg = f"Error: {event.error.message}"
+                            live.update(Panel(error_msg, title="Error", border_style="red"))
+                            raise Exception(error_msg)
             
             return {
                 "phase": "Consolidation",
-                "report": response.content[0].text
+                "report": full_response
             }
         except Exception as e:
-            logger.error(f"Error in Phase 5: {str(e)}")
+            logger.error(f"Error in Phase 5: {str(e)}", exc_info=True)
+            if hasattr(e, 'response'):
+                logger.error(f"API Response: {e.response}")
             return {
                 "phase": "Consolidation",
                 "error": str(e)
             }
             
     async def run_final_analysis(self, consolidated_report: Dict) -> Dict:
-        """Final Analysis Phase using o1-preview"""
+        """Final Analysis Phase using o3-mini"""
         try:
-            response = openai_client.chat.completions.create(
-                model="o1-preview",
+            logger.info("Starting Final Analysis with OpenAI API...")
+            # Validate consolidated report
+            if not consolidated_report or 'report' not in consolidated_report:
+                logger.error("Invalid consolidated report: Missing or empty report")
+                return {
+                    "phase": "Final Analysis",
+                    "error": "Invalid consolidated report structure"
+                }
+                
+            response = await run_openai_completion(
+                model="o3-mini",
                 messages=[{
                     "role": "user",
                     "content": f"""Process this consolidated report and provide a final analysis:
@@ -344,20 +506,24 @@ class ProjectAnalyzer:
                     5. Next analysis phase planning
                     """
                 }],
-                max_completion_tokens=25000
+                title="Final Analysis"
             )
             
-            reasoning_tokens = 0
-            if hasattr(response.usage, 'completion_tokens_details'):
-                reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
+            if "error" in response:
+                return {
+                    "phase": "Final Analysis",
+                    "error": response["error"]
+                }
             
             return {
                 "phase": "Final Analysis",
-                "analysis": response.choices[0].message.content,
-                "reasoning_tokens": reasoning_tokens
+                "analysis": response["content"],
+                "reasoning_tokens": response["tokens"]
             }
         except Exception as e:
-            logger.error(f"Error in Final Analysis: {str(e)}")
+            logger.error(f"Error in Final Analysis: {str(e)}", exc_info=True)
+            if hasattr(e, 'response'):
+                logger.error(f"API Response: {e.response}")
             return {
                 "phase": "Final Analysis",
                 "error": str(e)
@@ -372,29 +538,29 @@ class ProjectAnalyzer:
             TextColumn("[progress.description]{task.description}"),
             console=console
         ) as progress:
-            # Phase 1: Initial Discovery (Claude-3.5-Sonnet)
+            # Phase 1: Initial Discovery (Claude-3-Opus)
             task1 = progress.add_task("[green]Phase 1: Initial Discovery...", total=None)
             tree = generate_tree(self.directory)
             package_info = {}  # You can implement package.json parsing here
             self.phase1_results = await self.run_phase1(tree, package_info)
             progress.update(task1, completed=True)
             
-            # Phase 2: Methodical Planning (o1-preview)
+            # Phase 2: Methodical Planning (o3-mini)
             task2 = progress.add_task("[blue]Phase 2: Methodical Planning...", total=None)
             self.phase2_results = await self.run_phase2(self.phase1_results)
             progress.update(task2, completed=True)
             
-            # Phase 3: Deep Analysis (Claude-3.5-Sonnet)
+            # Phase 3: Deep Analysis (Claude-3-Opus)
             task3 = progress.add_task("[yellow]Phase 3: Deep Analysis...", total=None)
             self.phase3_results = await self.run_phase3(self.phase2_results, tree)
             progress.update(task3, completed=True)
             
-            # Phase 4: Synthesis (o1-preview)
+            # Phase 4: Synthesis (o3-mini)
             task4 = progress.add_task("[magenta]Phase 4: Synthesis...", total=None)
             self.phase4_results = await self.run_phase4(self.phase3_results)
             progress.update(task4, completed=True)
             
-            # Phase 5: Consolidation (Claude-3.5-Sonnet)
+            # Phase 5: Consolidation (Claude-3-Opus)
             task5 = progress.add_task("[cyan]Phase 5: Consolidation...", total=None)
             all_results = {
                 "phase1": self.phase1_results,
@@ -405,7 +571,7 @@ class ProjectAnalyzer:
             self.consolidated_report = await self.run_phase5(all_results)
             progress.update(task5, completed=True)
             
-            # Final Analysis (o1-preview)
+            # Final Analysis (o3-mini)
             task6 = progress.add_task("[white]Final Analysis...", total=None)
             self.final_analysis = await self.run_final_analysis(self.consolidated_report)
             progress.update(task6, completed=True)
@@ -414,27 +580,27 @@ class ProjectAnalyzer:
         analysis = [
             f"Project Analysis Report for: {self.directory}",
             "=" * 50 + "\n",
-            "Phase 1: Initial Discovery (Claude-3.5-Sonnet)",
+            "Phase 1: Initial Discovery (Claude-3-Opus)",
             "-" * 30,
             json.dumps(self.phase1_results, indent=2),
             "\n",
-            "Phase 2: Methodical Planning (o1-preview)",
+            "Phase 2: Methodical Planning (o3-mini)",
             "-" * 30,
             self.phase2_results.get("plan", "Error in planning phase"),
             "\n",
-            "Phase 3: Deep Analysis (Claude-3.5-Sonnet)",
+            "Phase 3: Deep Analysis (Claude-3-Opus)",
             "-" * 30,
             json.dumps(self.phase3_results, indent=2),
             "\n",
-            "Phase 4: Synthesis (o1-preview)",
+            "Phase 4: Synthesis (o3-mini)",
             "-" * 30,
             self.phase4_results.get("analysis", "Error in synthesis phase"),
             "\n",
-            "Phase 5: Consolidation (Claude-3.5-Sonnet)",
+            "Phase 5: Consolidation (Claude-3-Opus)",
             "-" * 30,
             self.consolidated_report.get("report", "Error in consolidation phase"),
             "\n",
-            "Final Analysis (o1-preview)",
+            "Final Analysis (o3-mini)",
             "-" * 30,
             self.final_analysis.get("analysis", "Error in final analysis phase"),
             "\n",
@@ -456,7 +622,7 @@ def save_phase_outputs(directory: Path, analysis_data: dict) -> None:
     
     # Phase 1: Initial Discovery
     with open(output_dir / "phase1_discovery.md", "w", encoding="utf-8") as f:
-        f.write("# Phase 1: Initial Discovery (Claude-3.5-Sonnet)\n\n")
+        f.write("# Phase 1: Initial Discovery (Claude-3-Opus)\n\n")
         f.write("## Agent Findings\n\n")
         f.write("```json\n")
         f.write(json.dumps(analysis_data["phase1"], indent=2))
@@ -464,29 +630,29 @@ def save_phase_outputs(directory: Path, analysis_data: dict) -> None:
     
     # Phase 2: Methodical Planning
     with open(output_dir / "phase2_planning.md", "w", encoding="utf-8") as f:
-        f.write("# Phase 2: Methodical Planning (o1-preview)\n\n")
+        f.write("# Phase 2: Methodical Planning (o3-mini)\n\n")
         f.write(analysis_data["phase2"].get("plan", "Error in planning phase"))
     
     # Phase 3: Deep Analysis
     with open(output_dir / "phase3_analysis.md", "w", encoding="utf-8") as f:
-        f.write("# Phase 3: Deep Analysis (Claude-3.5-Sonnet)\n\n")
+        f.write("# Phase 3: Deep Analysis (Claude-3-Opus)\n\n")
         f.write("```json\n")
         f.write(json.dumps(analysis_data["phase3"], indent=2))
         f.write("\n```\n")
     
     # Phase 4: Synthesis
     with open(output_dir / "phase4_synthesis.md", "w", encoding="utf-8") as f:
-        f.write("# Phase 4: Synthesis (o1-preview)\n\n")
+        f.write("# Phase 4: Synthesis (o3-mini)\n\n")
         f.write(analysis_data["phase4"].get("analysis", "Error in synthesis phase"))
     
     # Phase 5: Consolidation
     with open(output_dir / "phase5_consolidation.md", "w", encoding="utf-8") as f:
-        f.write("# Phase 5: Consolidation (Claude-3.5-Sonnet)\n\n")
+        f.write("# Phase 5: Consolidation (Claude-3-Opus)\n\n")
         f.write(analysis_data["consolidated_report"].get("report", "Error in consolidation phase"))
     
     # Final Analysis
     with open(output_dir / "final_analysis.md", "w", encoding="utf-8") as f:
-        f.write("# Final Analysis (o1-preview)\n\n")
+        f.write("# Final Analysis (o3-mini)\n\n")
         f.write(analysis_data["final_analysis"].get("analysis", "Error in final analysis phase"))
     
     # Complete Report
@@ -561,4 +727,4 @@ def main(path: str, output: str):
         sys.exit(1)
 
 if __name__ == '__main__':
-    main() 
+    main()
