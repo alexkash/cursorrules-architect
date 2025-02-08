@@ -304,7 +304,7 @@ class ProjectAnalyzer:
         ]
         
     async def run_phase1(self, tree: List[str], package_info: Dict) -> Dict:
-        """Initial Discovery Phase using Claude-3-Opus"""
+        """Initial Discovery Phase using Claude-3.5-sonnet"""
         context = {
             "tree_structure": tree,
             "package_info": package_info
@@ -360,7 +360,7 @@ class ProjectAnalyzer:
             }
             
     async def run_phase3(self, analysis_plan: Dict, tree: List[str]) -> Dict:
-        """Deep Analysis Phase using Claude-3-Opus"""
+        """Deep Analysis Phase using Claude-3.5-sonnet"""
         context = {
             "analysis_plan": analysis_plan,
             "tree_structure": tree
@@ -417,7 +417,7 @@ class ProjectAnalyzer:
             }
             
     async def run_phase5(self, all_results: Dict) -> Dict:
-        """Consolidation Phase using Claude-3-Opus"""
+        """Consolidation Phase using Claude-3.5-sonnet"""
         try:
             full_response = ""
             current_content = ""
@@ -538,7 +538,7 @@ class ProjectAnalyzer:
             TextColumn("[progress.description]{task.description}"),
             console=console
         ) as progress:
-            # Phase 1: Initial Discovery (Claude-3-Opus)
+            # Phase 1: Initial Discovery (Claude-3.5-sonnet)
             task1 = progress.add_task("[green]Phase 1: Initial Discovery...", total=None)
             tree = generate_tree(self.directory)
             package_info = {}  # You can implement package.json parsing here
@@ -550,7 +550,7 @@ class ProjectAnalyzer:
             self.phase2_results = await self.run_phase2(self.phase1_results)
             progress.update(task2, completed=True)
             
-            # Phase 3: Deep Analysis (Claude-3-Opus)
+            # Phase 3: Deep Analysis (Claude-3.5-sonnet)
             task3 = progress.add_task("[yellow]Phase 3: Deep Analysis...", total=None)
             self.phase3_results = await self.run_phase3(self.phase2_results, tree)
             progress.update(task3, completed=True)
@@ -560,7 +560,7 @@ class ProjectAnalyzer:
             self.phase4_results = await self.run_phase4(self.phase3_results)
             progress.update(task4, completed=True)
             
-            # Phase 5: Consolidation (Claude-3-Opus)
+            # Phase 5: Consolidation (Claude-3.5-sonnet)
             task5 = progress.add_task("[cyan]Phase 5: Consolidation...", total=None)
             all_results = {
                 "phase1": self.phase1_results,
@@ -580,7 +580,7 @@ class ProjectAnalyzer:
         analysis = [
             f"Project Analysis Report for: {self.directory}",
             "=" * 50 + "\n",
-            "Phase 1: Initial Discovery (Claude-3-Opus)",
+            "Phase 1: Initial Discovery (Claude-3.5-sonnet)",
             "-" * 30,
             json.dumps(self.phase1_results, indent=2),
             "\n",
@@ -588,7 +588,7 @@ class ProjectAnalyzer:
             "-" * 30,
             self.phase2_results.get("plan", "Error in planning phase"),
             "\n",
-            "Phase 3: Deep Analysis (Claude-3-Opus)",
+            "Phase 3: Deep Analysis (Claude-3.5-sonnet)",
             "-" * 30,
             json.dumps(self.phase3_results, indent=2),
             "\n",
@@ -596,7 +596,7 @@ class ProjectAnalyzer:
             "-" * 30,
             self.phase4_results.get("analysis", "Error in synthesis phase"),
             "\n",
-            "Phase 5: Consolidation (Claude-3-Opus)",
+            "Phase 5: Consolidation (Claude-3.5-sonnet)",
             "-" * 30,
             self.consolidated_report.get("report", "Error in consolidation phase"),
             "\n",
@@ -622,7 +622,7 @@ def save_phase_outputs(directory: Path, analysis_data: dict) -> None:
     
     # Phase 1: Initial Discovery
     with open(output_dir / "phase1_discovery.md", "w", encoding="utf-8") as f:
-        f.write("# Phase 1: Initial Discovery (Claude-3-Opus)\n\n")
+        f.write("# Phase 1: Initial Discovery (Claude-3.5-sonnet)\n\n")
         f.write("## Agent Findings\n\n")
         f.write("```json\n")
         f.write(json.dumps(analysis_data["phase1"], indent=2))
@@ -635,7 +635,7 @@ def save_phase_outputs(directory: Path, analysis_data: dict) -> None:
     
     # Phase 3: Deep Analysis
     with open(output_dir / "phase3_analysis.md", "w", encoding="utf-8") as f:
-        f.write("# Phase 3: Deep Analysis (Claude-3-Opus)\n\n")
+        f.write("# Phase 3: Deep Analysis (Claude-3.5-sonnet)\n\n")
         f.write("```json\n")
         f.write(json.dumps(analysis_data["phase3"], indent=2))
         f.write("\n```\n")
@@ -647,7 +647,7 @@ def save_phase_outputs(directory: Path, analysis_data: dict) -> None:
     
     # Phase 5: Consolidation
     with open(output_dir / "phase5_consolidation.md", "w", encoding="utf-8") as f:
-        f.write("# Phase 5: Consolidation (Claude-3-Opus)\n\n")
+        f.write("# Phase 5: Consolidation (Claude-3.5-sonnet)\n\n")
         f.write(analysis_data["consolidated_report"].get("report", "Error in consolidation phase"))
     
     # Final Analysis
