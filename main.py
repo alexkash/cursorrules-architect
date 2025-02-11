@@ -217,13 +217,13 @@ async def run_openai_completion(model: str, messages: List[Dict], title: str) ->
         full_response = ""
         current_content = ""
         
-        client = OpenAI()
+        # Используем глобальный клиент, который уже инициализирован с API ключом
+        global openai_client
         
         with Live(Panel("Processing...", title=title, border_style="blue"), refresh_per_second=4) as live:
-            stream = client.chat.completions.create(
+            stream = openai_client.chat.completions.create(
                 model=model,
                 messages=messages,
-                # max_completion_tokens=24000,
                 stream=True
             )
             
@@ -575,6 +575,19 @@ class ProjectAnalyzer:
             task6 = progress.add_task("[white]Final Analysis...", total=None)
             self.final_analysis = await self.run_final_analysis(self.consolidated_report)
             progress.update(task6, completed=True)
+            
+            # New phase: Generate .cursorrules
+            task7 = progress.add_task("[red]Generating .cursorrules file...", total=None)
+            analysis_data = {
+                "phase1": self.phase1_results,
+                "phase2": self.phase2_results,
+                "phase3": self.phase3_results,
+                "phase4": self.phase4_results,
+                "consolidated_report": self.consolidated_report,
+                "final_analysis": self.final_analysis
+            }
+            generate_cursorrules(self.directory, analysis_data)
+            progress.update(task7, completed=True)
         
         # Format final output
         analysis = [
@@ -666,6 +679,322 @@ def save_phase_outputs(directory: Path, analysis_data: dict) -> None:
         f.write(f"- Phase 4 reasoning tokens: {analysis_data['metrics']['phase4_tokens']}\n")
         f.write(f"- Final Analysis reasoning tokens: {analysis_data['metrics']['final_tokens']}\n\n")
         f.write("See individual phase files for detailed outputs.")
+
+def generate_cursorrules(directory: Path, analysis_data: dict) -> None:
+    """Generate .cursorrules file based on project analysis and template."""
+    try:
+        # Read template
+        template_path = directory / "cursorrules_template.txt"
+        if not template_path.exists():
+            logger.warning("Template file not found, using default sections")
+            template_content = """# Instructions
+
+During your interaction with the user, if you find anything reusable in this project (e.g. version of a library, model name), especially about a fix to a mistake you made or a correction you received, you should take note in the `Lessons` section in the `.cursorrules` file so you will not make the same mistake again. 
+
+You should also use the `.cursorrules` file as a Scratchpad to organize your thoughts. Especially when you receive a new task, you should first review the content of the Scratchpad, clear old different task if necessary, first explain the task, and plan the steps you need to take to complete the task. You can use todo markers to indicate the progress, e.g.
+[X] Task 1
+[ ] Task 2
+
+Also update the progress of the task in the Scratchpad when you finish a subtask.
+Especially when you finished a milestone, it will help to improve your depth of task accomplishment to use the Scratchpad to reflect and plan.
+The goal is to help you maintain a big picture as well as the progress of the task. Always refer to the Scratchpad when you plan the next step.
+
+# Lessons
+
+## User Specified Lessons
+
+## Cursor learned
+
+# Scratchpad
+"""
+        else:
+            with open(template_path, 'r', encoding='utf-8') as f:
+                template_content = f.read()
+
+        # Extract findings from phase 1
+        phase1_findings = analysis_data.get("phase1", {}).get("findings", [])
+        
+        # Initialize sections
+        structure_section = []
+        tools_section = []
+        tech_stack_section = []
+        infrastructure_section = []
+
+        # Process each agent's findings
+        for finding in phase1_findings:
+            if isinstance(finding, dict):
+                agent_type = finding.get("agent")
+                findings = finding.get("findings", "")
+
+                if agent_type == "Structure Agent":
+                    if isinstance(findings, str):
+                        # Extract Directory Organization
+                        if "Directory Organization Overview" in findings:
+                            dir_section = findings.split("Directory Organization Overview")[1].split("##")[0]
+                            structure_section.extend([
+                                "## Directory Organization",
+                                *[line.strip() for line in dir_section.split("\n")
+                                  if line.strip() and not line.strip().startswith("#")]
+                            ])
+                        
+                        # Extract Key Components
+                        if "Key Components Analysis" in findings:
+                            components_section = findings.split("Key Components Analysis")[1].split("##")[0]
+                            structure_section.extend([
+                                "\n## Key Components",
+                                *[line.strip() for line in components_section.split("\n")
+                                  if line.strip() and not line.strip().startswith("#")]
+                            ])
+                        
+                        # Extract Architectural Patterns
+                        if "Architectural Patterns" in findings:
+                            patterns_section = findings.split("Architectural Patterns")[1].split("##")[0]
+                            structure_section.extend([
+                                "\n## Architectural Patterns",
+                                *[line.strip() for line in patterns_section.split("\n")
+                                  if line.strip() and not line.strip().startswith("#")]
+                            ])
+
+                elif agent_type == "Tech Stack Agent":
+                    if isinstance(findings, str):
+                        # Extract Core Technologies
+                        if "Core Technologies" in findings:
+                            tech_section = findings.split("Core Technologies")[1].split("###")[0]
+                            tech_stack_section.extend([
+                                "## Core Technologies",
+                                *[line.strip() for line in tech_section.split("\n")
+                                  if line.strip() and (line.strip().startswith("-") or line.strip().startswith("*"))]
+                            ])
+                        
+                        # Extract Key Technical Components
+                        if "Key Technical Components" in findings:
+                            components = findings.split("Key Technical Components")[1].split("##")[0]
+                            tech_stack_section.extend([
+                                "\n## Technical Components",
+                                *[line.strip() for line in components.split("\n")
+                                  if line.strip() and (line.strip().startswith("-") or line.strip().startswith("*") or line.strip().startswith("•"))]
+                            ])
+                        
+                        # Extract Best Practices
+                        if "Best Practices & Current Standards" in findings:
+                            practices = findings.split("Best Practices & Current Standards")[1].split("##")[0]
+                            tech_stack_section.extend([
+                                "\n## Best Practices",
+                                *[line.strip() for line in practices.split("\n")
+                                  if line.strip() and (line.strip().startswith("-") or line.strip().startswith("*"))]
+                            ])
+
+                elif agent_type == "Dependency Agent":
+                    if isinstance(findings, str):
+                        # Extract Required Core Dependencies
+                        if "Required Core Dependencies" in findings:
+                            deps_section = findings.split("Required Core Dependencies")[1].split("##")[0]
+                            tools_section.extend([
+                                "## Development Environment",
+                                "### Required Dependencies",
+                                *[line.strip() for line in deps_section.split("\n")
+                                  if line.strip() and (line.strip().startswith("-") or line.strip().startswith("*"))]
+                            ])
+                        
+                        # Extract Optional Dependencies
+                        if "Optional Dependencies" in findings:
+                            opt_deps = findings.split("Optional Dependencies")[1].split("##")[0]
+                            tools_section.extend([
+                                "\n### Optional Dependencies",
+                                *[line.strip() for line in opt_deps.split("\n")
+                                  if line.strip() and (line.strip().startswith("-") or line.strip().startswith("*"))]
+                            ])
+                        
+                        # Extract Development Tools
+                        if "Development Tools" in findings:
+                            dev_tools = findings.split("Development Tools")[1].split("##")[0]
+                            tools_section.extend([
+                                "\n### Development Tools",
+                                *[line.strip() for line in dev_tools.split("\n")
+                                  if line.strip() and (line.strip().startswith("-") or line.strip().startswith("*"))]
+                            ])
+
+        # Add infrastructure information from phase 3 or 4
+        if "phase3" in analysis_data:
+            phase3_findings = analysis_data["phase3"].get("findings", [])
+            for finding in phase3_findings:
+                if isinstance(finding, dict) and finding.get("agent") == "Architecture Agent":
+                    arch_findings = finding.get("findings", "")
+                    if isinstance(arch_findings, str):
+                        infrastructure_section.extend([
+                            "## System Architecture",
+                            *[line.strip() for line in arch_findings.split("\n")
+                              if line.strip() and line.strip().startswith("-")],
+                            "\n## Implementation Patterns",
+                            "- Agent Pattern: Specialized agents for specific responsibilities",
+                            "- Repository Pattern: Clear directory structure",
+                            "- Strategy Pattern: Different analysis capabilities",
+                            "- Factory Pattern: Agent creation and management",
+                            "- Observer Pattern: Event handling and monitoring",
+                            "- Builder Pattern: Documentation generation"
+                        ])
+
+        # Extract structure information from phase 5
+        phase5_report = analysis_data.get("consolidated_report", {}).get("report", "")
+        
+        if phase5_report and isinstance(phase5_report, str):
+            # Extract Main Application Structure
+            if "Main Application Structure" in phase5_report:
+                structure_section.extend([
+                    "## Project Overview",
+                    "Main application components and organization:",
+                    ""
+                ])
+                
+                # Extract directory structure
+                if "Directory Organization" in phase5_report:
+                    dir_structure = phase5_report.split("```")[1].split("```")[0]
+                    structure_section.extend([
+                        "### Directory Structure",
+                        "```",
+                        dir_structure.strip(),
+                        "```",
+                        ""
+                    ])
+
+            # Extract Core Components
+            if "Core Components Analysis" in phase5_report:
+                structure_section.extend([
+                    "### Core Components",
+                    ""
+                ])
+                
+                # Entry Point
+                if "Entry Point (main.py)" in phase5_report:
+                    entry_section = phase5_report.split("Entry Point (main.py)")[1].split("###")[0]
+                    structure_section.extend([
+                        "#### Entry Point (main.py)",
+                        *[line.strip() for line in entry_section.split("\n")
+                          if line.strip() and line.strip().startswith("-")],
+                        ""
+                    ])
+
+                # Agent System
+                if "Agent System" in phase5_report:
+                    agent_section = phase5_report.split("Agent System")[1].split("###")[0]
+                    structure_section.extend([
+                        "#### Agent System",
+                        "**Strengths:**",
+                        *[line.strip() for line in agent_section.split("Areas for Improvement")[0].split("\n")
+                          if line.strip() and line.strip().startswith("-")],
+                        "",
+                        "**Areas for Improvement:**",
+                        *[line.strip() for line in agent_section.split("Areas for Improvement")[1].split("###")[0].split("\n")
+                          if line.strip() and line.strip().startswith("-")],
+                        ""
+                    ])
+
+                # Documentation Pipeline
+                if "Documentation Pipeline" in phase5_report:
+                    doc_section = phase5_report.split("Documentation Pipeline")[1].split("##")[0]
+                    structure_section.extend([
+                        "#### Documentation Pipeline",
+                        "**Current Implementation:**",
+                        *[line.strip() for line in doc_section.split("Recommended Enhancements")[0].split("\n")
+                          if line.strip() and line.strip().startswith("-")],
+                        "",
+                        "**Recommended Enhancements:**",
+                        *[line.strip() for line in doc_section.split("Recommended Enhancements")[1].split("##")[0].split("\n")
+                          if line.strip() and line.strip().startswith("-")],
+                        ""
+                    ])
+
+            # Extract Dependencies
+            if "Dependencies" in phase5_report:
+                tools_section.extend([
+                    "## Dependencies",
+                    ""
+                ])
+                
+                # External Requirements
+                if "External Requirements" in phase5_report:
+                    ext_deps = phase5_report.split("External Requirements")[1].split("```")[1].split("```")[0]
+                    tools_section.extend([
+                        "### External Requirements",
+                        "```python",
+                        ext_deps.strip(),
+                        "```",
+                        ""
+                    ])
+                
+                # Development Dependencies
+                if "Development Dependencies" in phase5_report:
+                    dev_deps = phase5_report.split("Development Dependencies")[1].split("```")[1].split("```")[0]
+                    tools_section.extend([
+                        "### Development Dependencies",
+                        "```python",
+                        dev_deps.strip(),
+                        "```",
+                        ""
+                    ])
+
+        # Add implementation patterns from phase 5
+        if "Architectural Patterns" in phase5_report:
+            patterns_section = phase5_report.split("Architectural Patterns")[1].split("##")[0]
+            infrastructure_section.extend([
+                "## Implementation Patterns",
+                *[line.strip() for line in patterns_section.split("\n")
+                  if line.strip() and line.strip().startswith("-")],
+                ""
+            ])
+
+        # Combine all sections while preserving template sections
+        sections = {}
+        current_section = None
+        protected_sections = ["Instructions", "Lessons", "Scratchpad"]
+        
+        for line in template_content.split('\n'):
+            if line.startswith('# '):
+                current_section = line[2:].strip()
+                sections[current_section] = []
+            elif current_section:
+                sections[current_section].append(line)
+
+        # Update non-protected sections
+        if "Project Structure" not in protected_sections:
+            sections["Project Structure"] = structure_section
+        if "Tools" not in protected_sections:
+            sections["Tools"] = tools_section
+        if "Tech Stack" not in protected_sections:
+            sections["Tech Stack"] = tech_stack_section
+        if "Infrastructure and DevOps" not in protected_sections:
+            sections["Infrastructure and DevOps"] = infrastructure_section
+
+        # Generate final content
+        final_content = []
+        for section, content in sections.items():
+            if section in protected_sections:
+                # For protected sections, keep original content including the header
+                final_content.append(f"# {section}")
+                if isinstance(content, list):
+                    final_content.extend(content)
+                else:
+                    final_content.append(content)
+            else:
+                # For non-protected sections, only add if there's content
+                if content:
+                    final_content.append(f"# {section}")
+                    if isinstance(content, list):
+                        final_content.extend(content)
+                    else:
+                        final_content.append(content)
+            final_content.append("")  # Add empty line between sections
+
+        # Write to .cursorrules file
+        cursorrules_path = directory / ".cursorrules"
+        with open(cursorrules_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(final_content))
+
+        logger.info(f"Generated .cursorrules file at: {cursorrules_path}")
+
+    except Exception as e:
+        logger.error(f"Error generating .cursorrules file: {str(e)}")
+        raise
 
 @click.command()
 @click.option('--path', '-p', type=str, help='Path to the project directory')
