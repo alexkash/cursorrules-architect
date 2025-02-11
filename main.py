@@ -576,18 +576,47 @@ class ProjectAnalyzer:
             self.final_analysis = await self.run_final_analysis(self.consolidated_report)
             progress.update(task6, completed=True)
             
-            # New phase: Generate .cursorrules
-            task7 = progress.add_task("[red]Generating .cursorrules file...", total=None)
-            analysis_data = {
-                "phase1": self.phase1_results,
-                "phase2": self.phase2_results,
-                "phase3": self.phase3_results,
-                "phase4": self.phase4_results,
-                "consolidated_report": self.consolidated_report,
-                "final_analysis": self.final_analysis
-            }
-            generate_cursorrules(self.directory, analysis_data)
-            progress.update(task7, completed=True)
+            # Ask user about .cursorrules generation
+            progress.stop()  # Pause progress display
+            should_generate = click.confirm(
+                "\nWould you like to generate/update .cursorrules file?",
+                default=True
+            )
+            
+            if should_generate:
+                task7 = progress.add_task("[red]Generating .cursorrules file...", total=None)
+                analysis_data = {
+                    "phase1": self.phase1_results,
+                    "phase2": self.phase2_results,
+                    "phase3": self.phase3_results,
+                    "phase4": self.phase4_results,
+                    "consolidated_report": self.consolidated_report,
+                    "final_analysis": self.final_analysis
+                }
+                
+                # Check if .cursorrules already exists
+                cursorrules_path = self.directory / ".cursorrules"
+                if cursorrules_path.exists():
+                    should_overwrite = click.confirm(
+                        "\n.cursorrules file already exists. Would you like to overwrite it?",
+                        default=False
+                    )
+                    if not should_overwrite:
+                        logger.info("Skipping .cursorrules generation - file exists and user chose not to overwrite")
+                        progress.update(task7, visible=False)
+                        return
+                
+                try:
+                    generate_cursorrules(self.directory, analysis_data)
+                    progress.update(task7, completed=True)
+                    logger.info("Successfully generated .cursorrules file")
+                except Exception as e:
+                    logger.error(f"Error generating .cursorrules: {str(e)}")
+                    progress.update(task7, visible=False)
+            else:
+                logger.info("Skipping .cursorrules generation - user chose not to generate")
+            
+            progress.refresh()  # Resume progress display
         
         # Format final output
         analysis = [
